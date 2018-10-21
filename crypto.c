@@ -1,3 +1,9 @@
+/*
+    Ettore Biazon Baccan        - 16000465
+    Mateus Henrique Zorzi       - 16100661
+    Matheus Martins Pupo        - 16145559
+    Rodrigo Okada Mendes        - 16056848
+*/
 #include <linux/init.h>           // Macros used to mark up functions e.g. __init __exit
 #include <linux/module.h>         // Core header for loading LKMs into the kernel
 #include <linux/device.h>         // Header to support the kernel Driver Model
@@ -12,6 +18,11 @@
 #define  DEVICE_NAME "crypto"    ///< The device will appear at /dev/crypto using this value
 #define  CLASS_NAME  "cryp"        ///< The device class -- this is a character device driver
 
+MODULE_LICENSE("GPL");            ///< The license type -- this affects available functionality
+MODULE_AUTHOR("Grupo SOB");    ///< The author -- visible when you use modinfo
+MODULE_DESCRIPTION("Crypto driver");  ///< The description -- see modinfo
+MODULE_VERSION("0.1");            ///< A version number to inform users
+
 static int    majorNumber;                  ///< Stores the device number -- determined automatically
 static short  size_of_message;              ///< Used to remember the size of the string stored
 static int    numberOpens = 0;              ///< Counts the number of times the device is opened
@@ -19,10 +30,12 @@ static struct class*  cryptocharClass  = NULL; ///< The device-driver class stru
 static struct device* cryptocharDevice = NULL; ///< The device-driver device struct pointer
 
 int size = 0;
-char *key;
+char *key = "0123456789ABCDEF";
 char *encrypted;
 char *decrypted;
 char *message;
+
+#define SHA256_LENGTH (256/8)
 
 module_param(key, charp, 0000);
 MODULE_PARM_DESC(key, "key");
@@ -119,12 +132,62 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
 
    if (error_count==0){            // if true then have success
       printk(KERN_INFO "Crypto: Sent %d characters to the user\n", size_of_message);
-      return (size_of_message=0);  // clear the position to the start and return 0
+      return (size_of_message = 0);  // clear the position to the start and return 0
    }
    else {
       printk(KERN_INFO "Crypto: Failed to send %d characters to the user\n", error_count);
       return -EFAULT;              // Failed -- return a bad address message (i.e. -14)
    }
+}
+
+void show_hash_result(char * plaintext, char * hash_sha256){
+	int i;
+	char str[SHA256_LENGTH*2 + 1];
+ 	pr_info("Sha256 test for string: \"%s\"\n", plaintext);
+ 	for (i = 0; i < SHA256_LENGTH ; i++){
+ 		sprintf(&str[i*2],"%02x", (unsigned char)hash_sha256[i]);
+ 	}
+ 	str[i*2] = 0;
+      message = kmalloc(strlen(str), GFP_ATOMIC);
+ 	strcpy(message, str);
+      printk("Mensagem hash256: %s", message);
+}
+
+int hash(char *in) {
+ 	char hash_sha256[SHA256_LENGTH];
+ 	struct crypto_shash *sha256;
+ 	struct shash_desc *shash;
+
+ 	sha256 = crypto_alloc_shash("sha256", 0, 0);
+ 	if (IS_ERR(sha256)){
+ 		return -1;
+	}
+ 	
+ 	shash = kmalloc(sizeof(struct shash_desc) + crypto_shash_descsize(sha256), GFP_KERNEL);
+ 	
+ 	if (!shash){
+ 		return -ENOMEM;
+	}
+
+ 	shash->tfm = sha256;
+ 	shash->flags = 0;
+ 	if (crypto_shash_init(shash)){
+ 		return -1;
+ 	}
+
+ 	if (crypto_shash_update(shash, in, strlen(in))){
+		return -1;
+	}
+ 	if (crypto_shash_final(shash, hash_sha256)){
+		return -1;
+	}
+ 
+ 	kfree(shash);
+ 	crypto_free_shash(sha256);
+ 	
+ 	show_hash_result(in, hash_sha256);
+ 	
+ 	return 0;
 }
 
 void encrypt(char *in) {
@@ -141,7 +204,7 @@ void encrypt(char *in) {
       encrypted = kmalloc(size * count, GFP_ATOMIC);
 
       tfm = crypto_alloc_cipher("aes", 0, 16); 
-      crypto_cipher_setkey(tfm,key,16);  
+      crypto_cipher_setkey(tfm, key, 16);  
       for(i=0;i<count;i++) {  
             char *c = kmalloc(size, GFP_ATOMIC);
             crypto_cipher_encrypt_one(tfm,c,in);    
@@ -152,36 +215,34 @@ void encrypt(char *in) {
             }
             in+=16;  
       }
-        
       crypto_free_cipher(tfm);  
 }
   
-void decrypt(char *in) {  
+void decrypt(void) {  
       int i,count,div,modd;
       struct crypto_cipher *tfm;
-      in = strim(in);
-      div=strlen(in)/16;
-      modd=strlen(in)%16;
+      
+      div=size/16;
+      modd=size%16;
       if(modd>0) {
             div++; 
       }
       count=div;
-      size = strlen(in);
+
       decrypted = kmalloc(size * count, GFP_ATOMIC);
       tfm = crypto_alloc_cipher("aes", 0, 16);  
       crypto_cipher_setkey(tfm,key,16);
 
       for(i=0;i<count;i++) {  
             char *c = kmalloc(size, GFP_ATOMIC);
-            crypto_cipher_decrypt_one(tfm,c,in); 
+            crypto_cipher_decrypt_one(tfm,c,encrypted); 
             if(i == 0) {
                   strcpy(decrypted, c);
             } else {
                   strcat(decrypted, c);
             }
-            in+=16;    
+            encrypted+=16;    
       }
-      crypto_free_cipher(tfm); 
 }  
 
 /** @brief This function is called whenever the device is being written to from user space i.e.
@@ -193,33 +254,43 @@ void decrypt(char *in) {
  *  @param offset The offset if required
  */
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
-   char opcao = *buffer;
-   char *src = kmalloc(strlen(buffer), GFP_ATOMIC);
-
-   switch(opcao) {
-      case 'c':
-            strcpy(src, buffer);
-            strsep(&src, " ");
-            encrypt(src);
-            printk(KERN_INFO "Dado encriptado: %*ph", 16, encrypted);
-            message = kmalloc(strlen(encrypted), GFP_ATOMIC);
-            strcpy(message, encrypted);
-            break;
-      case 'd':
-            strcpy(src, buffer);
-            strsep(&src, " ");
-            decrypt(src);
-            printk(KERN_INFO "Dado decriptado: %s", decrypted); 
-            message = kmalloc(strlen(decrypted), GFP_ATOMIC);
-            strcpy(message, decrypted);
-            break;
-      default:
-            printk("Opção inválida");
-            break;
-   }
-    
-   size_of_message = strlen(message);                 // store the length of the stored message
-   return len;
+      char opcao = *buffer;
+      char *src;
+      size_t sizeMessage;
+      int i;
+      printk("Buffer: %s", buffer);
+      sizeMessage = strlen(buffer) - 2;
+      src = kmalloc(sizeMessage, GFP_ATOMIC);
+      if (opcao == 'c' || opcao == 'd' || opcao == 'h'){
+            for (i = 0; i < sizeMessage; i++) {
+                  src[i] = buffer[i + 2];
+            }
+            src[i] = '\0';
+      }
+      switch(opcao) {
+            case 'c':
+                  printk("Testando o strsep: %s", src);
+                  encrypt(src);
+                  printk(KERN_INFO "Dado encriptado: %*ph", 16, encrypted);
+                  message = kmalloc(strlen(encrypted), GFP_ATOMIC);
+                  strcpy(message, encrypted);
+                  break;
+            case 'd':
+                  decrypt();
+                  printk(KERN_INFO "Dado decriptado: %s", decrypted); 
+                  message = kmalloc(strlen(decrypted), GFP_ATOMIC);
+                  strcpy(message, decrypted);
+                  break;
+            case 'h':
+                  hash(src);
+                  break;
+            default:
+                  printk("Opção inválida");
+                  break;
+      }
+      
+      size_of_message = strlen(message);                 // store the length of the stored message
+      return len;
 }
 
 /** @brief The device release function that is called whenever the device is closed/released by
