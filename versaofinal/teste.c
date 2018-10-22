@@ -10,10 +10,10 @@
 #include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
- 
+
 #define BUFFER_LENGTH 256               ///< The buffer length (crude but fine)
 static char receive[BUFFER_LENGTH];     ///< The receive buffer from the LKM
- 
+
 int main( int argc, char *argv[] ) {
     int retorno, dispositivo, tamanho, i;
     char stringToSend[BUFFER_LENGTH];
@@ -46,15 +46,15 @@ int main( int argc, char *argv[] ) {
         i++;
     }
     printf("] on device with operator [%c]\n", stringToSend[0]);
-   
+
     retorno = write(dispositivo, stringToSend, strlen(stringToSend)); // Send the string to the LKM
     if (retorno < 0){
         perror("Failed to write on device!");
         return errno;
-    } 
+    }
     printf("Press ENTER to continue!\n");
     getchar();
- 
+
     printf("Reading from device...\n");
     retorno = read(dispositivo, receive, BUFFER_LENGTH);        // Read the response from the LKM
     if (retorno < 0){
@@ -69,11 +69,6 @@ int main( int argc, char *argv[] ) {
     printf("]\n");
     } else {
         printf("Message received: [%s]\n", receive);
-printf("Message received2: [");
-    for (int k = 0; k < 16; k++){
-        printf("%02hhx", (unsigned char) receive[k]);
-    }
     }
     return 0;
 }
-
