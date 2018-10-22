@@ -69,6 +69,10 @@ int main( int argc, char *argv[] ) {
     printf("]\n");
     } else {
         printf("Message received: [%s]\n", receive);
+printf("Message received2: [");
+    for (int k = 0; k < 16; k++){
+        printf("%02hhx", (unsigned char) receive[k]);
+    }
     }
     return 0;
 }
